@@ -1,20 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import {
+  Animated,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withDelay,
-  withSpring,
-  withTiming,
-} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useGame } from "@/context/GameContext";
@@ -26,26 +20,40 @@ export default function GameOverScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const titleScale = useSharedValue(0.5);
-  const scoreOpacity = useSharedValue(0);
-  const buttonsOpacity = useSharedValue(0);
+  const titleScale = useRef(new Animated.Value(0.5)).current;
+  const scoreOpacity = useRef(new Animated.Value(0)).current;
+  const buttonsOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    titleScale.value = withSpring(1, { damping: 12, stiffness: 150 });
-    scoreOpacity.value = withDelay(300, withTiming(1, { duration: 400 }));
-    buttonsOpacity.value = withDelay(600, withTiming(1, { duration: 400 }));
+    Animated.spring(titleScale, {
+      toValue: 1,
+      damping: 12,
+      stiffness: 150,
+      useNativeDriver: true,
+    }).start();
+
+    Animated.sequence([
+      Animated.delay(300),
+      Animated.timing(scoreOpacity, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    Animated.sequence([
+      Animated.delay(600),
+      Animated.timing(buttonsOpacity, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
     if (Platform.OS !== "web") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }, []);
-
-  const titleStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: titleScale.value }],
-  }));
-  const scoreStyle = useAnimatedStyle(() => ({ opacity: scoreOpacity.value }));
-  const buttonsStyle = useAnimatedStyle(() => ({
-    opacity: buttonsOpacity.value,
-  }));
 
   const handleRetry = () => {
     if (Platform.OS !== "web") {
@@ -74,14 +82,16 @@ export default function GameOverScreen() {
         <View style={[styles.decoCircle, { width: 5, height: 5, top: 40, right: 80 }]} />
       </View>
 
-      <Animated.View style={[styles.titleSection, titleStyle]}>
+      <Animated.View
+        style={[styles.titleSection, { transform: [{ scale: titleScale }] }]}
+      >
         <View style={styles.xMark}>
           <Ionicons name="close-circle" size={64} color={Colors.buttonDanger} />
         </View>
         <Text style={styles.gameOverText}>GAME OVER</Text>
       </Animated.View>
 
-      <Animated.View style={[styles.scoreSection, scoreStyle]}>
+      <Animated.View style={[styles.scoreSection, { opacity: scoreOpacity }]}>
         <View style={styles.scoreCard}>
           <Text style={styles.scoreLabelText}>YOUR SCORE</Text>
           <Text style={styles.scoreValueText}>{score}</Text>
@@ -100,7 +110,7 @@ export default function GameOverScreen() {
         )}
       </Animated.View>
 
-      <Animated.View style={[styles.buttonSection, buttonsStyle]}>
+      <Animated.View style={[styles.buttonSection, { opacity: buttonsOpacity }]}>
         <Pressable
           style={({ pressed }) => [
             styles.retryButton,
