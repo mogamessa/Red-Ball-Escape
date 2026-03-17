@@ -54,7 +54,6 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     { onScoreUpdate, onGameOver, onBallCountUpdate, running, gameAreaHeight, gameAreaWidth },
     ref
   ) => {
-    // Use refs for game state to avoid stale closures in the interval
     const playerRef = useRef({ x: gameAreaWidth / 2, y: gameAreaHeight / 2 });
     const ballsRef = useRef<Ball[]>([]);
     const scoreRef = useRef(0);
@@ -63,7 +62,10 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     const gameAreaHeightRef = useRef(gameAreaHeight);
     const gameAreaWidthRef = useRef(gameAreaWidth);
 
-    // Track initialised state to avoid premature renders
+    // Store the screen-space offset of the game view (for Android coordinate fix)
+    const viewOffsetRef = useRef({ x: 0, y: 0 });
+    const viewRef = useRef<View>(null);
+
     const [isReady, setIsReady] = useState(false);
     const [renderTick, setRenderTick] = useState(0);
 
@@ -100,7 +102,6 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     }, []);
 
     const resetGame = useCallback(() => {
-      // Always use the current measured dimensions from refs
       playerRef.current = {
         x: gameAreaWidthRef.current / 2,
         y: gameAreaHeightRef.current / 2,
@@ -116,6 +117,20 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     useEffect(() => {
       resetGame();
     }, [resetGame]);
+
+    // Measure view offset after mount so PanResponder can convert screen coords
+    useEffect(() => {
+      const measureOffset = () => {
+        if (viewRef.current) {
+          viewRef.current.measure((_x, _y, _w, _h, pageX, pageY) => {
+            viewOffsetRef.current = { x: pageX ?? 0, y: pageY ?? 0 };
+          });
+        }
+      };
+      // Slight delay to ensure layout is complete
+      const t = setTimeout(measureOffset, 100);
+      return () => clearTimeout(t);
+    }, [isReady, gameAreaWidth, gameAreaHeight]);
 
     // Game loop
     useEffect(() => {
@@ -212,37 +227,33 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       };
     }, [onScoreUpdate, onGameOver, onBallCountUpdate]);
 
+    // Convert screen-space pageX/pageY to game-area-local coordinates
+    const toLocal = useCallback((pageX: number, pageY: number) => {
+      const w = gameAreaWidthRef.current;
+      const h = gameAreaHeightRef.current;
+      const ox = viewOffsetRef.current.x;
+      const oy = viewOffsetRef.current.y;
+      return {
+        x: Math.max(PLAYER_RADIUS, Math.min(w - PLAYER_RADIUS, pageX - ox)),
+        y: Math.max(PLAYER_RADIUS, Math.min(h - PLAYER_RADIUS, pageY - oy)),
+      };
+    }, []);
+
     const panResponder = useRef(
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (e) => {
           if (!runningRef.current) return;
-          const { locationX, locationY } = e.nativeEvent;
-          playerRef.current = {
-            x: Math.max(
-              PLAYER_RADIUS,
-              Math.min(gameAreaWidthRef.current - PLAYER_RADIUS, locationX)
-            ),
-            y: Math.max(
-              PLAYER_RADIUS,
-              Math.min(gameAreaHeightRef.current - PLAYER_RADIUS, locationY)
-            ),
-          };
+          const { pageX, pageY } = e.nativeEvent;
+          const pos = toLocal(pageX, pageY);
+          playerRef.current = pos;
         },
         onPanResponderMove: (e) => {
           if (!runningRef.current) return;
-          const { locationX, locationY } = e.nativeEvent;
-          playerRef.current = {
-            x: Math.max(
-              PLAYER_RADIUS,
-              Math.min(gameAreaWidthRef.current - PLAYER_RADIUS, locationX)
-            ),
-            y: Math.max(
-              PLAYER_RADIUS,
-              Math.min(gameAreaHeightRef.current - PLAYER_RADIUS, locationY)
-            ),
-          };
+          const { pageX, pageY } = e.nativeEvent;
+          const pos = toLocal(pageX, pageY);
+          playerRef.current = pos;
         },
       })
     ).current;
@@ -254,6 +265,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
 
     return (
       <View
+        ref={viewRef}
         style={[
           styles.gameArea,
           { width: gameAreaWidth, height: gameAreaHeight },

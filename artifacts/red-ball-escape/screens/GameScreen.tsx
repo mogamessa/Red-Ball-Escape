@@ -170,7 +170,6 @@ const styles = StyleSheet.create({
   gameWrapper: {
     flex: 1,
     position: "relative",
-    alignItems: "center",
     backgroundColor: Colors.gameArea,
   },
   pauseOverlay: {
