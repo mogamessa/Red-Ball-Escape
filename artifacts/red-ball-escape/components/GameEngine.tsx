@@ -1,0 +1,314 @@
+import * as Haptics from "expo-haptics";
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
+import {
+  Dimensions,
+  PanResponder,
+  Platform,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Colors from "@/constants/colors";
+
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+
+const PLAYER_RADIUS = 18;
+const ENEMY_RADIUS = 14;
+const MIN_ENEMY_RADIUS = 5;
+const GAME_WIDTH = Math.min(SCREEN_WIDTH - 0, 420);
+const FPS_INTERVAL = 16;
+
+interface Ball {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+}
+
+interface GameEngineHandle {
+  reset: () => void;
+}
+
+interface GameEngineProps {
+  onScoreUpdate: (score: number) => void;
+  onGameOver: (score: number) => void;
+  onBallCountUpdate: (count: number) => void;
+  running: boolean;
+  gameAreaHeight: number;
+}
+
+let _idCounter = 0;
+function genId() {
+  return `ball_${Date.now()}_${_idCounter++}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
+  (
+    { onScoreUpdate, onGameOver, onBallCountUpdate, running, gameAreaHeight },
+    ref
+  ) => {
+    const insets = useSafeAreaInsets();
+
+    const playerRef = useRef({ x: GAME_WIDTH / 2, y: gameAreaHeight / 2 });
+    const ballsRef = useRef<Ball[]>([]);
+    const scoreRef = useRef(0);
+    const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const runningRef = useRef(running);
+    const gameAreaHeightRef = useRef(gameAreaHeight);
+
+    const [renderTick, setRenderTick] = useState(0);
+
+    useEffect(() => {
+      runningRef.current = running;
+    }, [running]);
+
+    useEffect(() => {
+      gameAreaHeightRef.current = gameAreaHeight;
+    }, [gameAreaHeight]);
+
+    const spawnInitialBalls = useCallback(() => {
+      const h = gameAreaHeightRef.current;
+      const corners = [
+        { x: ENEMY_RADIUS + 10, y: ENEMY_RADIUS + 10 },
+        { x: GAME_WIDTH - ENEMY_RADIUS - 10, y: ENEMY_RADIUS + 10 },
+        { x: ENEMY_RADIUS + 10, y: h - ENEMY_RADIUS - 10 },
+        {
+          x: GAME_WIDTH - ENEMY_RADIUS - 10,
+          y: h - ENEMY_RADIUS - 10,
+        },
+      ];
+
+      ballsRef.current = corners.map((pos) => ({
+        id: genId(),
+        x: pos.x,
+        y: pos.y,
+        vx: (Math.random() * 2 + 1) * (Math.random() < 0.5 ? 1 : -1),
+        vy: (Math.random() * 2 + 1) * (Math.random() < 0.5 ? 1 : -1),
+        radius: ENEMY_RADIUS,
+      }));
+    }, []);
+
+    const resetGame = useCallback(() => {
+      playerRef.current = {
+        x: GAME_WIDTH / 2,
+        y: gameAreaHeightRef.current / 2,
+      };
+      scoreRef.current = 0;
+      spawnInitialBalls();
+      setRenderTick((t) => t + 1);
+    }, [spawnInitialBalls]);
+
+    useImperativeHandle(ref, () => ({ reset: resetGame }));
+
+    useEffect(() => {
+      resetGame();
+    }, [resetGame]);
+
+    // Game loop
+    useEffect(() => {
+      let frameCount = 0;
+
+      const tick = () => {
+        if (!runningRef.current) return;
+
+        frameCount++;
+        scoreRef.current++;
+        if (frameCount % 6 === 0) {
+          onScoreUpdate(scoreRef.current);
+        }
+
+        const h = gameAreaHeightRef.current;
+        const player = playerRef.current;
+        const newBalls: Ball[] = [];
+
+        for (const ball of ballsRef.current) {
+          let nx = ball.x + ball.vx;
+          let ny = ball.y + ball.vy;
+          let nvx = ball.vx;
+          let nvy = ball.vy;
+          let split = false;
+
+          if (nx - ball.radius <= 0) {
+            nx = ball.radius;
+            nvx = Math.abs(nvx);
+            split = true;
+          } else if (nx + ball.radius >= GAME_WIDTH) {
+            nx = GAME_WIDTH - ball.radius;
+            nvx = -Math.abs(nvx);
+            split = true;
+          }
+
+          if (ny - ball.radius <= 0) {
+            ny = ball.radius;
+            nvy = Math.abs(nvy);
+            split = true;
+          } else if (ny + ball.radius >= h) {
+            ny = h - ball.radius;
+            nvy = -Math.abs(nvy);
+            split = true;
+          }
+
+          const updatedBall: Ball = {
+            ...ball,
+            x: nx,
+            y: ny,
+            vx: nvx,
+            vy: nvy,
+          };
+          newBalls.push(updatedBall);
+
+          if (split && ball.radius > MIN_ENEMY_RADIUS) {
+            const newRadius = Math.max(ball.radius * 0.65, MIN_ENEMY_RADIUS);
+            const speed =
+              Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy) * 1.1;
+            const angle = Math.random() * Math.PI * 2;
+            newBalls.push({
+              id: genId(),
+              x: nx,
+              y: ny,
+              vx: Math.cos(angle) * speed,
+              vy: Math.sin(angle) * speed,
+              radius: newRadius,
+            });
+          }
+        }
+
+        ballsRef.current = newBalls.slice(0, 60);
+        onBallCountUpdate(ballsRef.current.length);
+
+        for (const ball of ballsRef.current) {
+          const dx = player.x - ball.x;
+          const dy = player.y - ball.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < PLAYER_RADIUS + ball.radius - 4) {
+            if (Platform.OS !== "web") {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            }
+            onGameOver(scoreRef.current);
+            return;
+          }
+        }
+
+        setRenderTick((t) => t + 1);
+      };
+
+      tickRef.current = setInterval(tick, FPS_INTERVAL);
+      return () => {
+        if (tickRef.current) clearInterval(tickRef.current);
+      };
+    }, [onScoreUpdate, onGameOver, onBallCountUpdate]);
+
+    const panResponder = useRef(
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (e) => {
+          if (!runningRef.current) return;
+          const { locationX, locationY } = e.nativeEvent;
+          playerRef.current = {
+            x: Math.max(
+              PLAYER_RADIUS,
+              Math.min(GAME_WIDTH - PLAYER_RADIUS, locationX)
+            ),
+            y: Math.max(
+              PLAYER_RADIUS,
+              Math.min(
+                gameAreaHeightRef.current - PLAYER_RADIUS,
+                locationY
+              )
+            ),
+          };
+        },
+        onPanResponderMove: (e) => {
+          if (!runningRef.current) return;
+          const { locationX, locationY } = e.nativeEvent;
+          playerRef.current = {
+            x: Math.max(
+              PLAYER_RADIUS,
+              Math.min(GAME_WIDTH - PLAYER_RADIUS, locationX)
+            ),
+            y: Math.max(
+              PLAYER_RADIUS,
+              Math.min(
+                gameAreaHeightRef.current - PLAYER_RADIUS,
+                locationY
+              )
+            ),
+          };
+        },
+      })
+    ).current;
+
+    const player = playerRef.current;
+    const balls = ballsRef.current;
+
+    return (
+      <View
+        style={[styles.gameArea, { width: GAME_WIDTH, height: gameAreaHeight }]}
+        {...panResponder.panHandlers}
+      >
+        {balls.map((ball) => (
+          <View
+            key={ball.id}
+            style={[
+              styles.enemyBall,
+              {
+                left: ball.x - ball.radius,
+                top: ball.y - ball.radius,
+                width: ball.radius * 2,
+                height: ball.radius * 2,
+                borderRadius: ball.radius,
+              },
+            ]}
+          />
+        ))}
+        <View
+          style={[
+            styles.playerBall,
+            {
+              left: player.x - PLAYER_RADIUS,
+              top: player.y - PLAYER_RADIUS,
+            },
+          ]}
+        />
+      </View>
+    );
+  }
+);
+
+GameEngine.displayName = "GameEngine";
+
+export default GameEngine;
+
+const styles = StyleSheet.create({
+  gameArea: {
+    backgroundColor: Colors.gameArea,
+    position: "relative",
+    overflow: "hidden",
+  },
+  playerBall: {
+    position: "absolute",
+    width: PLAYER_RADIUS * 2,
+    height: PLAYER_RADIUS * 2,
+    borderRadius: PLAYER_RADIUS,
+    backgroundColor: Colors.playerBall,
+    elevation: 10,
+  },
+  enemyBall: {
+    position: "absolute",
+    backgroundColor: Colors.enemyBall,
+    elevation: 4,
+  },
+});

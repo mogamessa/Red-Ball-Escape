@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "Red Ball Escape"
+version = "1.0.0"
+id = "artifacts/red-ball-escape"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+localPort = 24598
+name = "expo"
+paths = ["/"]
+
+[services.development]
+run = "pnpm --filter @workspace/red-ball-escape run dev"
+
+[services.env]
+PORT = "24598"
+BASE_PATH = "/"
+
+[services.production]
+build = ["pnpm", "--filter", "@workspace/red-ball-escape", "run", "build"]
+run = ["pnpm", "--filter", "@workspace/red-ball-escape", "run", "serve"]
