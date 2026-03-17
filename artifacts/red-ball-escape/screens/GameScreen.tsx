@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useRef, useState } from "react";
 import {
-  Dimensions,
+  LayoutChangeEvent,
   Platform,
   Pressable,
   StyleSheet,
@@ -14,9 +14,6 @@ import Colors from "@/constants/colors";
 import GameEngine from "@/components/GameEngine";
 import { useGame } from "@/context/GameContext";
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const GAME_WIDTH = Math.min(SCREEN_WIDTH, 420);
-
 const HUD_HEIGHT = 60;
 
 export default function GameScreen() {
@@ -24,14 +21,17 @@ export default function GameScreen() {
   const insets = useSafeAreaInsets();
   const [liveScore, setLiveScore] = useState(0);
   const [ballCount, setBallCount] = useState(4);
+  const [gameAreaHeight, setGameAreaHeight] = useState(0);
+  const [gameAreaWidth, setGameAreaWidth] = useState(0);
   const engineRef = useRef<{ reset: () => void }>(null);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
-  const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const totalHeaderHeight = topInset + HUD_HEIGHT;
-  const gameAreaHeight =
-    Dimensions.get("window").height - totalHeaderHeight - bottomInset - 4;
+  const handleGameWrapperLayout = useCallback((e: LayoutChangeEvent) => {
+    const { height, width } = e.nativeEvent.layout;
+    setGameAreaHeight(height);
+    setGameAreaWidth(width);
+  }, []);
 
   const handleScoreUpdate = useCallback((s: number) => {
     setLiveScore(s);
@@ -64,6 +64,7 @@ export default function GameScreen() {
 
   const isPaused = gameState === "paused";
   const isPlaying = gameState === "playing";
+  const isReady = gameAreaHeight > 0 && gameAreaWidth > 0;
 
   return (
     <View style={[styles.container, { paddingTop: topInset }]}>
@@ -93,15 +94,18 @@ export default function GameScreen() {
         </View>
       </View>
 
-      <View style={styles.gameWrapper}>
-        <GameEngine
-          ref={engineRef}
-          onScoreUpdate={handleScoreUpdate}
-          onGameOver={handleGameOver}
-          onBallCountUpdate={handleBallCount}
-          running={isPlaying}
-          gameAreaHeight={gameAreaHeight}
-        />
+      <View style={styles.gameWrapper} onLayout={handleGameWrapperLayout}>
+        {isReady && (
+          <GameEngine
+            ref={engineRef}
+            onScoreUpdate={handleScoreUpdate}
+            onGameOver={handleGameOver}
+            onBallCountUpdate={handleBallCount}
+            running={isPlaying}
+            gameAreaHeight={gameAreaHeight}
+            gameAreaWidth={gameAreaWidth}
+          />
+        )}
 
         {isPaused && (
           <View style={styles.pauseOverlay}>
@@ -167,6 +171,7 @@ const styles = StyleSheet.create({
     flex: 1,
     position: "relative",
     alignItems: "center",
+    backgroundColor: Colors.gameArea,
   },
   pauseOverlay: {
     position: "absolute",

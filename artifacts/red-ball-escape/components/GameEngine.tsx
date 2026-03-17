@@ -8,22 +8,16 @@ import React, {
   useState,
 } from "react";
 import {
-  Dimensions,
   PanResponder,
   Platform,
   StyleSheet,
-  Text,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
-
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const PLAYER_RADIUS = 18;
 const ENEMY_RADIUS = 14;
 const MIN_ENEMY_RADIUS = 5;
-const GAME_WIDTH = Math.min(SCREEN_WIDTH - 0, 420);
 const FPS_INTERVAL = 16;
 
 interface Ball {
@@ -45,6 +39,7 @@ interface GameEngineProps {
   onBallCountUpdate: (count: number) => void;
   running: boolean;
   gameAreaHeight: number;
+  gameAreaWidth: number;
 }
 
 let _idCounter = 0;
@@ -56,18 +51,20 @@ function genId() {
 
 const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
   (
-    { onScoreUpdate, onGameOver, onBallCountUpdate, running, gameAreaHeight },
+    { onScoreUpdate, onGameOver, onBallCountUpdate, running, gameAreaHeight, gameAreaWidth },
     ref
   ) => {
-    const insets = useSafeAreaInsets();
-
-    const playerRef = useRef({ x: GAME_WIDTH / 2, y: gameAreaHeight / 2 });
+    // Use refs for game state to avoid stale closures in the interval
+    const playerRef = useRef({ x: gameAreaWidth / 2, y: gameAreaHeight / 2 });
     const ballsRef = useRef<Ball[]>([]);
     const scoreRef = useRef(0);
     const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const runningRef = useRef(running);
     const gameAreaHeightRef = useRef(gameAreaHeight);
+    const gameAreaWidthRef = useRef(gameAreaWidth);
 
+    // Track initialised state to avoid premature renders
+    const [isReady, setIsReady] = useState(false);
     const [renderTick, setRenderTick] = useState(0);
 
     useEffect(() => {
@@ -78,16 +75,18 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       gameAreaHeightRef.current = gameAreaHeight;
     }, [gameAreaHeight]);
 
+    useEffect(() => {
+      gameAreaWidthRef.current = gameAreaWidth;
+    }, [gameAreaWidth]);
+
     const spawnInitialBalls = useCallback(() => {
       const h = gameAreaHeightRef.current;
+      const w = gameAreaWidthRef.current;
       const corners = [
         { x: ENEMY_RADIUS + 10, y: ENEMY_RADIUS + 10 },
-        { x: GAME_WIDTH - ENEMY_RADIUS - 10, y: ENEMY_RADIUS + 10 },
+        { x: w - ENEMY_RADIUS - 10, y: ENEMY_RADIUS + 10 },
         { x: ENEMY_RADIUS + 10, y: h - ENEMY_RADIUS - 10 },
-        {
-          x: GAME_WIDTH - ENEMY_RADIUS - 10,
-          y: h - ENEMY_RADIUS - 10,
-        },
+        { x: w - ENEMY_RADIUS - 10, y: h - ENEMY_RADIUS - 10 },
       ];
 
       ballsRef.current = corners.map((pos) => ({
@@ -101,12 +100,14 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     }, []);
 
     const resetGame = useCallback(() => {
+      // Always use the current measured dimensions from refs
       playerRef.current = {
-        x: GAME_WIDTH / 2,
+        x: gameAreaWidthRef.current / 2,
         y: gameAreaHeightRef.current / 2,
       };
       scoreRef.current = 0;
       spawnInitialBalls();
+      setIsReady(true);
       setRenderTick((t) => t + 1);
     }, [spawnInitialBalls]);
 
@@ -130,6 +131,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
         }
 
         const h = gameAreaHeightRef.current;
+        const w = gameAreaWidthRef.current;
         const player = playerRef.current;
         const newBalls: Ball[] = [];
 
@@ -144,8 +146,8 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
             nx = ball.radius;
             nvx = Math.abs(nvx);
             split = true;
-          } else if (nx + ball.radius >= GAME_WIDTH) {
-            nx = GAME_WIDTH - ball.radius;
+          } else if (nx + ball.radius >= w) {
+            nx = w - ball.radius;
             nvx = -Math.abs(nvx);
             split = true;
           }
@@ -220,14 +222,11 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           playerRef.current = {
             x: Math.max(
               PLAYER_RADIUS,
-              Math.min(GAME_WIDTH - PLAYER_RADIUS, locationX)
+              Math.min(gameAreaWidthRef.current - PLAYER_RADIUS, locationX)
             ),
             y: Math.max(
               PLAYER_RADIUS,
-              Math.min(
-                gameAreaHeightRef.current - PLAYER_RADIUS,
-                locationY
-              )
+              Math.min(gameAreaHeightRef.current - PLAYER_RADIUS, locationY)
             ),
           };
         },
@@ -237,26 +236,28 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           playerRef.current = {
             x: Math.max(
               PLAYER_RADIUS,
-              Math.min(GAME_WIDTH - PLAYER_RADIUS, locationX)
+              Math.min(gameAreaWidthRef.current - PLAYER_RADIUS, locationX)
             ),
             y: Math.max(
               PLAYER_RADIUS,
-              Math.min(
-                gameAreaHeightRef.current - PLAYER_RADIUS,
-                locationY
-              )
+              Math.min(gameAreaHeightRef.current - PLAYER_RADIUS, locationY)
             ),
           };
         },
       })
     ).current;
 
+    if (!isReady) return null;
+
     const player = playerRef.current;
     const balls = ballsRef.current;
 
     return (
       <View
-        style={[styles.gameArea, { width: GAME_WIDTH, height: gameAreaHeight }]}
+        style={[
+          styles.gameArea,
+          { width: gameAreaWidth, height: gameAreaHeight },
+        ]}
         {...panResponder.panHandlers}
       >
         {balls.map((ball) => (
