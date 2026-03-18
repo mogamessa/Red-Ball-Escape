@@ -11,6 +11,7 @@ import {
   PanResponder,
   Platform,
   StyleSheet,
+  Text,
   View,
 } from "react-native";
 import Colors from "@/constants/colors";
@@ -19,6 +20,11 @@ const PLAYER_RADIUS = 18;
 const ENEMY_RADIUS = 14;
 const MIN_ENEMY_RADIUS = 5;
 const FPS_INTERVAL = 16;
+const STAR_RADIUS = 20;
+const SPLIT_CHANCE = 0.25; // only 25% chance to split on wall bounce
+const SLOW_MULTIPLIER = 0.3; // speed factor when slow powerup is active
+const SLOW_DURATION_MS = 3000;
+const STAR_SPAWN_INTERVAL_MS = 10000;
 
 interface Ball {
   id: string;
@@ -27,6 +33,11 @@ interface Ball {
   vx: number;
   vy: number;
   radius: number;
+}
+
+interface Star {
+  x: number;
+  y: number;
 }
 
 interface GameEngineHandle {
@@ -62,24 +73,22 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     const gameAreaHeightRef = useRef(gameAreaHeight);
     const gameAreaWidthRef = useRef(gameAreaWidth);
 
-    // Store the screen-space offset of the game view (for Android coordinate fix)
+    // Powerup state
+    const starRef = useRef<Star | null>(null);
+    const slowActiveRef = useRef(false);
+    const starSpawnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const slowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // View offset for Android coordinate fix
     const viewOffsetRef = useRef({ x: 0, y: 0 });
     const viewRef = useRef<View>(null);
 
     const [isReady, setIsReady] = useState(false);
     const [renderTick, setRenderTick] = useState(0);
 
-    useEffect(() => {
-      runningRef.current = running;
-    }, [running]);
-
-    useEffect(() => {
-      gameAreaHeightRef.current = gameAreaHeight;
-    }, [gameAreaHeight]);
-
-    useEffect(() => {
-      gameAreaWidthRef.current = gameAreaWidth;
-    }, [gameAreaWidth]);
+    useEffect(() => { runningRef.current = running; }, [running]);
+    useEffect(() => { gameAreaHeightRef.current = gameAreaHeight; }, [gameAreaHeight]);
+    useEffect(() => { gameAreaWidthRef.current = gameAreaWidth; }, [gameAreaWidth]);
 
     const spawnInitialBalls = useCallback(() => {
       const h = gameAreaHeightRef.current;
@@ -101,12 +110,40 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       }));
     }, []);
 
+    const spawnStar = useCallback(() => {
+      if (!runningRef.current) return;
+      const w = gameAreaWidthRef.current;
+      const h = gameAreaHeightRef.current;
+      const margin = STAR_RADIUS + 20;
+      starRef.current = {
+        x: margin + Math.random() * (w - margin * 2),
+        y: margin + Math.random() * (h - margin * 2),
+      };
+    }, []);
+
+    const activateSlow = useCallback(() => {
+      slowActiveRef.current = true;
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      // Clear any existing slow timer
+      if (slowTimeoutRef.current) clearTimeout(slowTimeoutRef.current);
+      slowTimeoutRef.current = setTimeout(() => {
+        slowActiveRef.current = false;
+        slowTimeoutRef.current = null;
+      }, SLOW_DURATION_MS);
+    }, []);
+
     const resetGame = useCallback(() => {
       playerRef.current = {
         x: gameAreaWidthRef.current / 2,
         y: gameAreaHeightRef.current / 2,
       };
       scoreRef.current = 0;
+      starRef.current = null;
+      slowActiveRef.current = false;
+      if (slowTimeoutRef.current) { clearTimeout(slowTimeoutRef.current); slowTimeoutRef.current = null; }
+      if (starSpawnTimerRef.current) { clearInterval(starSpawnTimerRef.current); starSpawnTimerRef.current = null; }
       spawnInitialBalls();
       setIsReady(true);
       setRenderTick((t) => t + 1);
@@ -118,7 +155,18 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       resetGame();
     }, [resetGame]);
 
-    // Measure view offset after mount so PanResponder can convert screen coords
+    // Star spawn timer — starts after game begins, stops when not running
+    useEffect(() => {
+      if (!isReady) return;
+      starSpawnTimerRef.current = setInterval(() => {
+        if (runningRef.current) spawnStar();
+      }, STAR_SPAWN_INTERVAL_MS);
+      return () => {
+        if (starSpawnTimerRef.current) clearInterval(starSpawnTimerRef.current);
+      };
+    }, [isReady, spawnStar]);
+
+    // Measure view offset after mount (Android coordinate fix)
     useEffect(() => {
       const measureOffset = () => {
         if (viewRef.current) {
@@ -127,7 +175,6 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           });
         }
       };
-      // Slight delay to ensure layout is complete
       const t = setTimeout(measureOffset, 100);
       return () => clearTimeout(t);
     }, [isReady, gameAreaWidth, gameAreaHeight]);
@@ -148,11 +195,12 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
         const h = gameAreaHeightRef.current;
         const w = gameAreaWidthRef.current;
         const player = playerRef.current;
+        const speedMult = slowActiveRef.current ? SLOW_MULTIPLIER : 1.0;
         const newBalls: Ball[] = [];
 
         for (const ball of ballsRef.current) {
-          let nx = ball.x + ball.vx;
-          let ny = ball.y + ball.vy;
+          let nx = ball.x + ball.vx * speedMult;
+          let ny = ball.y + ball.vy * speedMult;
           let nvx = ball.vx;
           let nvy = ball.vy;
           let split = false;
@@ -160,36 +208,29 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           if (nx - ball.radius <= 0) {
             nx = ball.radius;
             nvx = Math.abs(nvx);
-            split = true;
+            if (Math.random() < SPLIT_CHANCE) split = true;
           } else if (nx + ball.radius >= w) {
             nx = w - ball.radius;
             nvx = -Math.abs(nvx);
-            split = true;
+            if (Math.random() < SPLIT_CHANCE) split = true;
           }
 
           if (ny - ball.radius <= 0) {
             ny = ball.radius;
             nvy = Math.abs(nvy);
-            split = true;
+            if (Math.random() < SPLIT_CHANCE) split = true;
           } else if (ny + ball.radius >= h) {
             ny = h - ball.radius;
             nvy = -Math.abs(nvy);
-            split = true;
+            if (Math.random() < SPLIT_CHANCE) split = true;
           }
 
-          const updatedBall: Ball = {
-            ...ball,
-            x: nx,
-            y: ny,
-            vx: nvx,
-            vy: nvy,
-          };
+          const updatedBall: Ball = { ...ball, x: nx, y: ny, vx: nvx, vy: nvy };
           newBalls.push(updatedBall);
 
           if (split && ball.radius > MIN_ENEMY_RADIUS) {
             const newRadius = Math.max(ball.radius * 0.65, MIN_ENEMY_RADIUS);
-            const speed =
-              Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy) * 1.1;
+            const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy) * 1.1;
             const angle = Math.random() * Math.PI * 2;
             newBalls.push({
               id: genId(),
@@ -205,6 +246,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
         ballsRef.current = newBalls.slice(0, 60);
         onBallCountUpdate(ballsRef.current.length);
 
+        // Check player vs enemy collision
         for (const ball of ballsRef.current) {
           const dx = player.x - ball.x;
           const dy = player.y - ball.y;
@@ -218,6 +260,18 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           }
         }
 
+        // Check player vs star collision
+        const star = starRef.current;
+        if (star) {
+          const dx = player.x - star.x;
+          const dy = player.y - star.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < PLAYER_RADIUS + STAR_RADIUS) {
+            starRef.current = null;
+            activateSlow();
+          }
+        }
+
         setRenderTick((t) => t + 1);
       };
 
@@ -225,9 +279,8 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       return () => {
         if (tickRef.current) clearInterval(tickRef.current);
       };
-    }, [onScoreUpdate, onGameOver, onBallCountUpdate]);
+    }, [onScoreUpdate, onGameOver, onBallCountUpdate, activateSlow]);
 
-    // Convert screen-space pageX/pageY to game-area-local coordinates
     const toLocal = useCallback((pageX: number, pageY: number) => {
       const w = gameAreaWidthRef.current;
       const h = gameAreaHeightRef.current;
@@ -245,15 +298,11 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (e) => {
           if (!runningRef.current) return;
-          const { pageX, pageY } = e.nativeEvent;
-          const pos = toLocal(pageX, pageY);
-          playerRef.current = pos;
+          playerRef.current = toLocal(e.nativeEvent.pageX, e.nativeEvent.pageY);
         },
         onPanResponderMove: (e) => {
           if (!runningRef.current) return;
-          const { pageX, pageY } = e.nativeEvent;
-          const pos = toLocal(pageX, pageY);
-          playerRef.current = pos;
+          playerRef.current = toLocal(e.nativeEvent.pageX, e.nativeEvent.pageY);
         },
       })
     ).current;
@@ -262,14 +311,13 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
 
     const player = playerRef.current;
     const balls = ballsRef.current;
+    const star = starRef.current;
+    const isSlow = slowActiveRef.current;
 
     return (
       <View
         ref={viewRef}
-        style={[
-          styles.gameArea,
-          { width: gameAreaWidth, height: gameAreaHeight },
-        ]}
+        style={[styles.gameArea, { width: gameAreaWidth, height: gameAreaHeight }]}
         {...panResponder.panHandlers}
       >
         {balls.map((ball) => (
@@ -277,6 +325,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
             key={ball.id}
             style={[
               styles.enemyBall,
+              isSlow && styles.enemyBallSlow,
               {
                 left: ball.x - ball.radius,
                 top: ball.y - ball.radius,
@@ -287,6 +336,23 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
             ]}
           />
         ))}
+
+        {star && (
+          <View
+            style={[
+              styles.starContainer,
+              {
+                left: star.x - STAR_RADIUS,
+                top: star.y - STAR_RADIUS,
+                width: STAR_RADIUS * 2,
+                height: STAR_RADIUS * 2,
+              },
+            ]}
+          >
+            <Text style={styles.starText}>★</Text>
+          </View>
+        )}
+
         <View
           style={[
             styles.playerBall,
@@ -323,5 +389,21 @@ const styles = StyleSheet.create({
     position: "absolute",
     backgroundColor: Colors.enemyBall,
     elevation: 4,
+  },
+  enemyBallSlow: {
+    backgroundColor: "#aab0cc",
+    opacity: 0.8,
+  },
+  starContainer: {
+    position: "absolute",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  starText: {
+    fontSize: 32,
+    color: "#FFD700",
+    textShadowColor: "#FFF59D",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
   },
 });
