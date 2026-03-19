@@ -22,8 +22,10 @@ const FPS_INTERVAL = 16;
 const STAR_RADIUS = 20;
 const SLOW_MULTIPLIER = 0.3;
 const SLOW_DURATION_MS = 3000;
-const STAR_SPAWN_INTERVAL_MS = 3000;  // Star every 3 seconds
-const BALL_SPAWN_INTERVAL_MS = 6000;  // +2 balls every 6 seconds
+const STAR_BASE_INTERVAL_MS = 10000; // starts at 10s, gets faster as balls increase
+const STAR_MIN_INTERVAL_MS = 2000;   // fastest possible: 2s
+const STAR_LIFETIME_MS = 5000;       // star auto-expires after 5s if not collected
+const BALL_SPAWN_INTERVAL_MS = 6000; // +2 balls every 6 seconds
 
 interface Ball {
   id: string;
@@ -95,9 +97,11 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     // Powerup state
     const starRef = useRef<Star | null>(null);
     const slowActiveRef = useRef(false);
-    const starSpawnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const ballSpawnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const slowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Dynamic star timing (updated inside game loop)
+    const lastStarSpawnRef = useRef<number>(0); // timestamp of last spawn attempt
+    const starShownAtRef = useRef<number>(0);   // timestamp when current star appeared
 
     // View offset for Android coordinate fix
     const viewOffsetRef = useRef({ x: 0, y: 0 });
@@ -109,18 +113,6 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     useEffect(() => { runningRef.current = running; }, [running]);
     useEffect(() => { gameAreaHeightRef.current = gameAreaHeight; }, [gameAreaHeight]);
     useEffect(() => { gameAreaWidthRef.current = gameAreaWidth; }, [gameAreaWidth]);
-
-    // Spawn star at random position
-    const spawnStar = useCallback(() => {
-      if (!runningRef.current) return;
-      const w = gameAreaWidthRef.current;
-      const h = gameAreaHeightRef.current;
-      const margin = STAR_RADIUS + 20;
-      starRef.current = {
-        x: margin + Math.random() * (w - margin * 2),
-        y: margin + Math.random() * (h - margin * 2),
-      };
-    }, []);
 
     // Spawn 2 new balls to progress difficulty
     const spawnTwoBalls = useCallback(() => {
@@ -156,9 +148,10 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       scoreRef.current = 0;
       starRef.current = null;
       slowActiveRef.current = false;
+      lastStarSpawnRef.current = Date.now(); // start timer from now
+      starShownAtRef.current = 0;
 
       if (slowTimeoutRef.current) { clearTimeout(slowTimeoutRef.current); slowTimeoutRef.current = null; }
-      if (starSpawnTimerRef.current) { clearInterval(starSpawnTimerRef.current); starSpawnTimerRef.current = null; }
       if (ballSpawnTimerRef.current) { clearInterval(ballSpawnTimerRef.current); ballSpawnTimerRef.current = null; }
 
       // Start with exactly 2 balls
@@ -174,24 +167,18 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       resetGame();
     }, [resetGame]);
 
-    // Timers: star + ball progression
+    // Ball progression timer: +2 balls every 6s → count: 2→4→6→8→...
     useEffect(() => {
       if (!isReady) return;
 
-      starSpawnTimerRef.current = setInterval(() => {
-        if (runningRef.current) spawnStar();
-      }, STAR_SPAWN_INTERVAL_MS);
-
-      // Add 2 balls every BALL_SPAWN_INTERVAL_MS → count: 2→4→6→8→...
       ballSpawnTimerRef.current = setInterval(() => {
         if (runningRef.current) spawnTwoBalls();
       }, BALL_SPAWN_INTERVAL_MS);
 
       return () => {
-        if (starSpawnTimerRef.current) clearInterval(starSpawnTimerRef.current);
         if (ballSpawnTimerRef.current) clearInterval(ballSpawnTimerRef.current);
       };
-    }, [isReady, spawnStar, spawnTwoBalls]);
+    }, [isReady, spawnTwoBalls]);
 
     // Measure view offset after mount (Android coordinate fix)
     useEffect(() => {
@@ -257,14 +244,39 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           }
         }
 
-        // Player vs star collision
-        const star = starRef.current;
-        if (star) {
+        // Dynamic star spawn logic
+        const now = Date.now();
+        if (starRef.current) {
+          // Check player vs star collision
+          const star = starRef.current;
           const dx = player.x - star.x;
           const dy = player.y - star.y;
           if (Math.sqrt(dx * dx + dy * dy) < PLAYER_RADIUS + STAR_RADIUS) {
             starRef.current = null;
+            lastStarSpawnRef.current = now; // reset timer after collection
             activateSlow();
+          } else if (now - starShownAtRef.current > STAR_LIFETIME_MS) {
+            // Star expired without being collected — remove and reset timer
+            starRef.current = null;
+            lastStarSpawnRef.current = now;
+          }
+        } else {
+          // Calculate dynamic interval: faster as more balls are on screen
+          // 2 balls → 10s, 6 balls → 8s, 10 balls → 6s, 16 balls → 3s, 20+ → 2s
+          const ballCount = ballsRef.current.length;
+          const dynamicInterval = Math.max(
+            STAR_MIN_INTERVAL_MS,
+            STAR_BASE_INTERVAL_MS - (ballCount - 2) * 400
+          );
+          if (now - lastStarSpawnRef.current >= dynamicInterval) {
+            const sw = gameAreaWidthRef.current;
+            const sh = gameAreaHeightRef.current;
+            const margin = STAR_RADIUS + 20;
+            starRef.current = {
+              x: margin + Math.random() * (sw - margin * 2),
+              y: margin + Math.random() * (sh - margin * 2),
+            };
+            starShownAtRef.current = now;
           }
         }
 
