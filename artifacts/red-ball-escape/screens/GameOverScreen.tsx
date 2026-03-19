@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { useGame } from "@/context/GameContext";
+import AdBanner from "@/components/AdBanner";
 
 export default function GameOverScreen() {
   const { score, highScore, isNewHighScore, startGame, backToMenu } = useGame();
@@ -70,74 +71,93 @@ export default function GameOverScreen() {
   };
 
   return (
-    <View
-      style={[
-        styles.container,
-        { paddingTop: topInset + 30, paddingBottom: bottomInset + 30 },
-      ]}
-    >
-      <View style={styles.topDecorations}>
-        <View style={[styles.decoCircle, { width: 6, height: 6, top: 20, left: 30 }]} />
-        <View style={[styles.decoCircle, { width: 10, height: 10, top: 60, right: 50 }]} />
-        <View style={[styles.decoCircle, { width: 5, height: 5, top: 40, right: 80 }]} />
+    <View style={styles.wrapper}>
+      {/* Main scrollable content */}
+      <View
+        style={[
+          styles.container,
+          { paddingTop: topInset + 30, paddingBottom: 24 },
+        ]}
+      >
+        <View style={styles.topDecorations}>
+          <View style={[styles.decoCircle, { width: 6, height: 6, top: 20, left: 30 }]} />
+          <View style={[styles.decoCircle, { width: 10, height: 10, top: 60, right: 50 }]} />
+          <View style={[styles.decoCircle, { width: 5, height: 5, top: 40, right: 80 }]} />
+        </View>
+
+        <Animated.View
+          style={[styles.titleSection, { transform: [{ scale: titleScale }] }]}
+        >
+          <View style={styles.xMark}>
+            <Ionicons name="close-circle" size={64} color={Colors.buttonDanger} />
+          </View>
+          <Text style={styles.gameOverText}>GAME OVER</Text>
+        </Animated.View>
+
+        <Animated.View style={[styles.scoreSection, { opacity: scoreOpacity }]}>
+          <View style={styles.scoreCard}>
+            <Text style={styles.scoreLabelText}>YOUR SCORE</Text>
+            <Text style={styles.scoreValueText}>{score}</Text>
+          </View>
+
+          {isNewHighScore ? (
+            <View style={styles.newHighScoreBadge}>
+              <Ionicons name="trophy" size={16} color={Colors.score} />
+              <Text style={styles.newHighScoreText}>NEW BEST!</Text>
+            </View>
+          ) : (
+            <View style={styles.bestRow}>
+              <Ionicons name="trophy-outline" size={16} color={Colors.textMuted} />
+              <Text style={styles.bestText}>Best: {highScore}</Text>
+            </View>
+          )}
+        </Animated.View>
+
+        <Animated.View style={[styles.buttonSection, { opacity: buttonsOpacity }]}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.retryButton,
+              pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
+            ]}
+            onPress={handleRetry}
+          >
+            <Ionicons name="refresh" size={22} color="#fff" />
+            <Text style={styles.retryButtonText}>TRY AGAIN</Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.menuButton,
+              pressed && { opacity: 0.7 },
+            ]}
+            onPress={handleMenu}
+          >
+            <Ionicons name="home-outline" size={18} color={Colors.textSecondary} />
+            <Text style={styles.menuButtonText}>Main Menu</Text>
+          </Pressable>
+        </Animated.View>
       </View>
 
-      <Animated.View
-        style={[styles.titleSection, { transform: [{ scale: titleScale }] }]}
-      >
-        <View style={styles.xMark}>
-          <Ionicons name="close-circle" size={64} color={Colors.buttonDanger} />
-        </View>
-        <Text style={styles.gameOverText}>GAME OVER</Text>
-      </Animated.View>
+      {/* AdMob Banner — pinned to bottom of screen */}
+      <AdBanner />
 
-      <Animated.View style={[styles.scoreSection, { opacity: scoreOpacity }]}>
-        <View style={styles.scoreCard}>
-          <Text style={styles.scoreLabelText}>YOUR SCORE</Text>
-          <Text style={styles.scoreValueText}>{score}</Text>
-        </View>
-
-        {isNewHighScore ? (
-          <View style={styles.newHighScoreBadge}>
-            <Ionicons name="trophy" size={16} color={Colors.score} />
-            <Text style={styles.newHighScoreText}>NEW BEST!</Text>
-          </View>
-        ) : (
-          <View style={styles.bestRow}>
-            <Ionicons name="trophy-outline" size={16} color={Colors.textMuted} />
-            <Text style={styles.bestText}>Best: {highScore}</Text>
-          </View>
-        )}
-      </Animated.View>
-
-      <Animated.View style={[styles.buttonSection, { opacity: buttonsOpacity }]}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.retryButton,
-            pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
-          ]}
-          onPress={handleRetry}
-        >
-          <Ionicons name="refresh" size={22} color="#fff" />
-          <Text style={styles.retryButtonText}>TRY AGAIN</Text>
-        </Pressable>
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.menuButton,
-            pressed && { opacity: 0.7 },
-          ]}
-          onPress={handleMenu}
-        >
-          <Ionicons name="home-outline" size={18} color={Colors.textSecondary} />
-          <Text style={styles.menuButtonText}>Main Menu</Text>
-        </Pressable>
-      </Animated.View>
+      {/* Safe area spacer below the ad */}
+      <View
+        style={{
+          height: bottomInset,
+          backgroundColor: Colors.backgroundCard,
+        }}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    flex: 1,
+    backgroundColor: Colors.background,
+    flexDirection: "column",
+  },
   container: {
     flex: 1,
     backgroundColor: Colors.background,
