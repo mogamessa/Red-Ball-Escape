@@ -18,13 +18,12 @@ import Colors from "@/constants/colors";
 
 const PLAYER_RADIUS = 18;
 const ENEMY_RADIUS = 14;
-const MIN_ENEMY_RADIUS = 5;
 const FPS_INTERVAL = 16;
 const STAR_RADIUS = 20;
-const SPLIT_CHANCE = 0.25; // only 25% chance to split on wall bounce
-const SLOW_MULTIPLIER = 0.3; // speed factor when slow powerup is active
+const SLOW_MULTIPLIER = 0.3;
 const SLOW_DURATION_MS = 3000;
-const STAR_SPAWN_INTERVAL_MS = 10000;
+const STAR_SPAWN_INTERVAL_MS = 3000;  // Star every 3 seconds
+const BALL_SPAWN_INTERVAL_MS = 6000;  // +2 balls every 6 seconds
 
 interface Ball {
   id: string;
@@ -60,6 +59,26 @@ function genId() {
     .slice(2, 8)}`;
 }
 
+function makeRandomBall(w: number, h: number): Ball {
+  // Spawn from a random edge so ball enters from the sides
+  const side = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
+  let x: number;
+  let y: number;
+  const speed = Math.random() * 1.5 + 1.5;
+  const angle = Math.random() * Math.PI * 2;
+  const vx = Math.cos(angle) * speed;
+  const vy = Math.sin(angle) * speed;
+
+  switch (side) {
+    case 0: x = Math.random() * w; y = ENEMY_RADIUS; break;
+    case 1: x = w - ENEMY_RADIUS; y = Math.random() * h; break;
+    case 2: x = Math.random() * w; y = h - ENEMY_RADIUS; break;
+    default: x = ENEMY_RADIUS; y = Math.random() * h; break;
+  }
+
+  return { id: genId(), x, y, vx, vy, radius: ENEMY_RADIUS };
+}
+
 const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
   (
     { onScoreUpdate, onGameOver, onBallCountUpdate, running, gameAreaHeight, gameAreaWidth },
@@ -77,6 +96,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     const starRef = useRef<Star | null>(null);
     const slowActiveRef = useRef(false);
     const starSpawnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const ballSpawnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const slowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // View offset for Android coordinate fix
@@ -90,26 +110,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     useEffect(() => { gameAreaHeightRef.current = gameAreaHeight; }, [gameAreaHeight]);
     useEffect(() => { gameAreaWidthRef.current = gameAreaWidth; }, [gameAreaWidth]);
 
-    const spawnInitialBalls = useCallback(() => {
-      const h = gameAreaHeightRef.current;
-      const w = gameAreaWidthRef.current;
-      const corners = [
-        { x: ENEMY_RADIUS + 10, y: ENEMY_RADIUS + 10 },
-        { x: w - ENEMY_RADIUS - 10, y: ENEMY_RADIUS + 10 },
-        { x: ENEMY_RADIUS + 10, y: h - ENEMY_RADIUS - 10 },
-        { x: w - ENEMY_RADIUS - 10, y: h - ENEMY_RADIUS - 10 },
-      ];
-
-      ballsRef.current = corners.map((pos) => ({
-        id: genId(),
-        x: pos.x,
-        y: pos.y,
-        vx: (Math.random() * 2 + 1) * (Math.random() < 0.5 ? 1 : -1),
-        vy: (Math.random() * 2 + 1) * (Math.random() < 0.5 ? 1 : -1),
-        radius: ENEMY_RADIUS,
-      }));
-    }, []);
-
+    // Spawn star at random position
     const spawnStar = useCallback(() => {
       if (!runningRef.current) return;
       const w = gameAreaWidthRef.current;
@@ -121,12 +122,25 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       };
     }, []);
 
+    // Spawn 2 new balls to progress difficulty
+    const spawnTwoBalls = useCallback(() => {
+      if (!runningRef.current) return;
+      if (ballsRef.current.length >= 60) return;
+      const w = gameAreaWidthRef.current;
+      const h = gameAreaHeightRef.current;
+      ballsRef.current = [
+        ...ballsRef.current,
+        makeRandomBall(w, h),
+        makeRandomBall(w, h),
+      ];
+    }, []);
+
+    // Activate slow powerup
     const activateSlow = useCallback(() => {
       slowActiveRef.current = true;
       if (Platform.OS !== "web") {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      // Clear any existing slow timer
       if (slowTimeoutRef.current) clearTimeout(slowTimeoutRef.current);
       slowTimeoutRef.current = setTimeout(() => {
         slowActiveRef.current = false;
@@ -135,19 +149,24 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
     }, []);
 
     const resetGame = useCallback(() => {
-      playerRef.current = {
-        x: gameAreaWidthRef.current / 2,
-        y: gameAreaHeightRef.current / 2,
-      };
+      const w = gameAreaWidthRef.current;
+      const h = gameAreaHeightRef.current;
+
+      playerRef.current = { x: w / 2, y: h / 2 };
       scoreRef.current = 0;
       starRef.current = null;
       slowActiveRef.current = false;
+
       if (slowTimeoutRef.current) { clearTimeout(slowTimeoutRef.current); slowTimeoutRef.current = null; }
       if (starSpawnTimerRef.current) { clearInterval(starSpawnTimerRef.current); starSpawnTimerRef.current = null; }
-      spawnInitialBalls();
+      if (ballSpawnTimerRef.current) { clearInterval(ballSpawnTimerRef.current); ballSpawnTimerRef.current = null; }
+
+      // Start with exactly 2 balls
+      ballsRef.current = [makeRandomBall(w, h), makeRandomBall(w, h)];
+
       setIsReady(true);
       setRenderTick((t) => t + 1);
-    }, [spawnInitialBalls]);
+    }, []);
 
     useImperativeHandle(ref, () => ({ reset: resetGame }));
 
@@ -155,16 +174,24 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       resetGame();
     }, [resetGame]);
 
-    // Star spawn timer — starts after game begins, stops when not running
+    // Timers: star + ball progression
     useEffect(() => {
       if (!isReady) return;
+
       starSpawnTimerRef.current = setInterval(() => {
         if (runningRef.current) spawnStar();
       }, STAR_SPAWN_INTERVAL_MS);
+
+      // Add 2 balls every BALL_SPAWN_INTERVAL_MS → count: 2→4→6→8→...
+      ballSpawnTimerRef.current = setInterval(() => {
+        if (runningRef.current) spawnTwoBalls();
+      }, BALL_SPAWN_INTERVAL_MS);
+
       return () => {
         if (starSpawnTimerRef.current) clearInterval(starSpawnTimerRef.current);
+        if (ballSpawnTimerRef.current) clearInterval(ballSpawnTimerRef.current);
       };
-    }, [isReady, spawnStar]);
+    }, [isReady, spawnStar, spawnTwoBalls]);
 
     // Measure view offset after mount (Android coordinate fix)
     useEffect(() => {
@@ -179,7 +206,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
       return () => clearTimeout(t);
     }, [isReady, gameAreaWidth, gameAreaHeight]);
 
-    // Game loop
+    // Game loop — pure bouncing, no random splits
     useEffect(() => {
       let frameCount = 0;
 
@@ -203,55 +230,25 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           let ny = ball.y + ball.vy * speedMult;
           let nvx = ball.vx;
           let nvy = ball.vy;
-          let split = false;
 
-          if (nx - ball.radius <= 0) {
-            nx = ball.radius;
-            nvx = Math.abs(nvx);
-            if (Math.random() < SPLIT_CHANCE) split = true;
-          } else if (nx + ball.radius >= w) {
-            nx = w - ball.radius;
-            nvx = -Math.abs(nvx);
-            if (Math.random() < SPLIT_CHANCE) split = true;
-          }
+          // Wall bounce — no splitting, equal size maintained
+          if (nx - ball.radius <= 0) { nx = ball.radius; nvx = Math.abs(nvx); }
+          else if (nx + ball.radius >= w) { nx = w - ball.radius; nvx = -Math.abs(nvx); }
 
-          if (ny - ball.radius <= 0) {
-            ny = ball.radius;
-            nvy = Math.abs(nvy);
-            if (Math.random() < SPLIT_CHANCE) split = true;
-          } else if (ny + ball.radius >= h) {
-            ny = h - ball.radius;
-            nvy = -Math.abs(nvy);
-            if (Math.random() < SPLIT_CHANCE) split = true;
-          }
+          if (ny - ball.radius <= 0) { ny = ball.radius; nvy = Math.abs(nvy); }
+          else if (ny + ball.radius >= h) { ny = h - ball.radius; nvy = -Math.abs(nvy); }
 
-          const updatedBall: Ball = { ...ball, x: nx, y: ny, vx: nvx, vy: nvy };
-          newBalls.push(updatedBall);
-
-          if (split && ball.radius > MIN_ENEMY_RADIUS) {
-            const newRadius = Math.max(ball.radius * 0.65, MIN_ENEMY_RADIUS);
-            const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy) * 1.1;
-            const angle = Math.random() * Math.PI * 2;
-            newBalls.push({
-              id: genId(),
-              x: nx,
-              y: ny,
-              vx: Math.cos(angle) * speed,
-              vy: Math.sin(angle) * speed,
-              radius: newRadius,
-            });
-          }
+          newBalls.push({ ...ball, x: nx, y: ny, vx: nvx, vy: nvy });
         }
 
-        ballsRef.current = newBalls.slice(0, 60);
+        ballsRef.current = newBalls;
         onBallCountUpdate(ballsRef.current.length);
 
-        // Check player vs enemy collision
+        // Player vs enemy collision
         for (const ball of ballsRef.current) {
           const dx = player.x - ball.x;
           const dy = player.y - ball.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < PLAYER_RADIUS + ball.radius - 4) {
+          if (Math.sqrt(dx * dx + dy * dy) < PLAYER_RADIUS + ball.radius - 4) {
             if (Platform.OS !== "web") {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
             }
@@ -260,13 +257,12 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
           }
         }
 
-        // Check player vs star collision
+        // Player vs star collision
         const star = starRef.current;
         if (star) {
           const dx = player.x - star.x;
           const dy = player.y - star.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < PLAYER_RADIUS + STAR_RADIUS) {
+          if (Math.sqrt(dx * dx + dy * dy) < PLAYER_RADIUS + STAR_RADIUS) {
             starRef.current = null;
             activateSlow();
           }
@@ -356,10 +352,7 @@ const GameEngine = forwardRef<GameEngineHandle, GameEngineProps>(
         <View
           style={[
             styles.playerBall,
-            {
-              left: player.x - PLAYER_RADIUS,
-              top: player.y - PLAYER_RADIUS,
-            },
+            { left: player.x - PLAYER_RADIUS, top: player.y - PLAYER_RADIUS },
           ]}
         />
       </View>
@@ -400,10 +393,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   starText: {
-    fontSize: 32,
+    fontSize: 34,
     color: "#FFD700",
-    textShadowColor: "#FFF59D",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 10,
   },
 });
